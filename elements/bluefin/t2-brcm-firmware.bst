@@ -32,9 +32,23 @@
 # publicly reachable repository, for a personal single-user build on hardware
 # the owner physically possesses. That posture is accepted ONLY for this build.
 # It is not a redistribution licence and it MUST be re-examined before this
-# element is published in any public image, at which point the correct route is
-# extraction from the machine's own macOS partition (impossible here: macOS has
-# been wiped) or a platform-firmware mechanism outside the image.
+# element is published in any public image. Apple's macOS SLA prohibits
+# redistribution outright -- "you may not copy, modify or redistribute the Apple
+# Boot ROM code or firmware, or any portions thereof" (Sequoia SLA, section K) --
+# and Broadcom's LICENCE.broadcom_bcm43xx grant is conditioned on the bytes being
+# "as provided by Broadcom" with the Agreement included, which macOS-extracted
+# files do not satisfy. Upstream linux-firmware's brcm/ tree carries none of
+# these (56 files, no 4364/4377, no "apple," entry in WHENCE) and neither Fedora,
+# Debian nor NixOS ship them, so there is no redistributable path.
+#
+# THE ROUTE FOR A PUBLISHED IMAGE IS USER-SIDE EXTRACTION. t2linux documents five
+# methods (wiki.t2linux.org/guides/wifi-bluetooth), and Arch's arch-mact2 withdrew
+# its redistributing mirror in favour of an MIT fetcher script, which is the
+# ecosystem precedent. On bootc the practical form is a derived image: build
+# FROM Dakota with the user's own extracted bytes COPYed into
+# /usr/lib/firmware/brcm. Note that a wiped macOS is NOT a dead end -- t2linux
+# method 5 extracts from an Apple Recovery Image, and "systemd-sysext" is not an
+# option because bootc does not support it.
 #
 # THE FILE LIST IS A PROBE RESULT, NOT radio.tar
 #
