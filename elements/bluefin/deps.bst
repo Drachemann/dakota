@@ -63,6 +63,27 @@ depends:
   - bluefin/brlaser.bst
   # - bluefin/lsp-plugins-lv2.bst
 
+  # Apple T2 (MacBookPro16,2) userspace. The kernel patch band and config
+  # fragment live in patches/linux/ and files/linux/dakota-config.sh on
+  # core/linux-fdsdk.bst, and the brcm firmware is a separate element.
+  # Source-first for all three: t2fanrd is built from a pinned upstream commit
+  # with generated Cargo sources, and the other two are pinned config/data
+  # installs.
+  #
+  # tiny-dfr is deliberately NOT installed. The mainline hid-appletb-kbd driver
+  # drives the Touch Bar in Boot Camp mode and the T2's own firmware renders
+  # Escape plus the function/media keys, so no userspace daemon is required. The
+  # daemon additionally holds stale device descriptors across suspend with
+  # t2bce. This matches the field-proven Omarchy T2 configuration, which removed
+  # tiny-dfr for exactly that reason.
+  - bluefin/t2fanrd.bst
+  - bluefin/t2linux-audio.bst
+  - bluefin/t2linux-config.bst
+  # Narrow, pinned brcm Wi-Fi/BT blob set for BCM4364b3 (trinidad) +
+  # BCM4377b3 (formosa). Must stay listed here: an element that is authored but
+  # unreferenced never enters the image closure and no firmware ships.
+  - bluefin/t2-brcm-firmware.bst
+
   # Include things missing from the gnomeos base image
   - gnome-build-meta.bst:core-deps/fwupd.bst
 

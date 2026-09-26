@@ -169,3 +169,61 @@ enable XEN_GRANT_DMA_OPS
 enable XEN_PVH
 enable XEN_VIRTIO
 module XEN_WDT
+
+# ---------------------------------------------------------------------------
+# Apple T2 (MacBookPro16,2) support, driven by the t2linux/linux-t2-patches
+# series in patches/linux/ (reserved 1000-9999 band; see
+# elements/core/linux-fdsdk.bst). Three facts shape this block:
+#
+#   * T2BCE_* exist only once that band applies: the series sources its Kconfig
+#     inside drivers/staging's `if STAGING` block, so STAGING (enabled above)
+#     is a hard prerequisite, and APFS_FS comes from the series' fs/apfs tree.
+#     Those symbols are exempt from the element's absent-symbol pruning, so
+#     dropping the band fails the build instead of silently shipping a kernel
+#     with no T2 support.
+#   * The internal keyboard, trackpad and Touch Bar sit behind the T2's virtual
+#     USB controller. t2bce_core and t2bce_vhci therefore have to be in vmlinuz
+#     rather than in a module the initramfs does not carry: root is LUKS
+#     encrypted and there is no input device at the passphrase prompt if they
+#     are =m without an allowlist entry. The element asserts both are =y;
+#     everything else here is loadable.
+#   * The BCM4364 Wi-Fi and BCM4377b3 Bluetooth parts need their Broadcom
+#     transports. fdsdk already registers BRCMFMAC, BT_HCIBCM4377,
+#     BT_HCIUART_BCM, HID_MAGICMOUSE, HID_SENSOR_ALS, SENSORS_APPLESMC,
+#     APPLE_GMUX and FW_LOADER_COMPRESS_ZSTD, some of them only inside an arch
+#     conditional; the whole set is restated here so a junction bump cannot
+#     drop a T2 requirement unnoticed.
+#
+# Driver build order follows upstream's extra_config. Do not add
+# CONFIG_APPLE_BCE: no such symbol exists in this series.
+enable T2BCE_CORE
+enable T2BCE_VHCI
+module T2BCE_DMA
+module T2BCE_AUDIO
+module T2BCE_AVE
+
+# Fans (t2fanrd drives fanN_manual), the gmux backlight switch, and the Touch
+# Bar's display plus its keyboard backlight.
+module SENSORS_APPLESMC
+module APPLE_GMUX
+module DRM_APPLETBDRM
+module HID_APPLETB_KBD
+module HID_APPLETB_BL
+
+# Trackpad and ambient light sensor; the Apple HID transport (HID_APPLE) is
+# already registered above.
+module HID_MAGICMOUSE
+module HID_SENSOR_ALS
+
+# Read-only access to an APFS container on an external disk. macOS is wiped on
+# this chassis, so nothing here mounts APFS at boot.
+module APFS_FS
+
+module BRCMFMAC
+module BT_BCM
+module BT_HCIBCM4377
+enable BT_HCIUART_BCM
+
+# fdsdk installs /usr/lib/firmware zstd-compressed; without the decompressor
+# the T2 kernel cannot see the brcm blobs it has to load.
+enable FW_LOADER_COMPRESS_ZSTD

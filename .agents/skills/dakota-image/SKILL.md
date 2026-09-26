@@ -73,6 +73,7 @@ Use this skill when filesystem content crosses from BuildStream artifacts into O
 ## References
 
 - [`docs/oci-assembly.md`](../../../docs/oci-assembly.md)
+- [`docs/t2-recovery.md`](../../../docs/t2-recovery.md) — recovery path and pre-flash gate for T2 hardware
 - [`references/local-ota.md`](references/local-ota.md)
 - [`elements/oci/`](../../../elements/oci/)
 - [`files/firstboot/`](../../../files/firstboot/)

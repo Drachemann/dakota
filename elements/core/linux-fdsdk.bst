@@ -3,21 +3,41 @@
 # This reproduces the x86_64/aarch64 recipe of the linux.bst element at
 # Dakota's pinned freedesktop-sdk 26.08 ref (elements/components/linux.bst
 # plus elements/include/linux.yml, with build-depends junction-prefixed).
-# The vendored files/linux/ scripts and patches/linux/ queue are verbatim
-# copies from that ref; re-sync all of them at every fdsdk bump.
+# The vendored files/linux/ scripts and the fdsdk-owned entries in
+# patches/linux/ are verbatim copies from that ref; re-sync all of them at
+# every fdsdk bump. patches/linux/ additionally carries the Apple T2 series:
+#   - one reserved band, 1000-9999, imported from t2linux/linux-t2-patches
+#     (branch main, 9e773c88, KVER=7.2.7) and applied in lexicographic
+#     filename order with fdsdk's 0001-riscv... and gcc15.patch, which keep
+#     their names;
+#   - numbers stay upstream's (1001 t2bce, 2008-9002 subsystems) and carry
+#     upstream's internal order; every file has its own Upstream-Status,
+#     Source and Exit headers for the next re-sync;
+#   - 3001 is the one file pinned one series revision back (fea007484b84):
+#     main's 3001 is rebased onto the applesmc.c that v7.2.7 shipped, and this
+#     element pins v7.2.6. Pre-7.2.7 3001 reaches the same end state on this
+#     tree, and main's revision of it is otherwise byte-identical to its
+#     neighbours. Re-check that pin when the kernel ref moves;
+#   - files/linux/dakota-config.sh drives the T2 symbols, and the Kconfig
+#     entries only the band provides are exempt from the pruning pass below
+#     so that losing the band fails the build instead of quietly shipping a
+#     kernel with no T2 support.
 #
 # As of 26.08, upstream builds ATH12K, strips modules (INSTALL_MOD_STRIP=1),
 # and splits vmlinux/System.map to the devel domain itself, so those former
-# Dakota deltas are gone. One Dakota delta remains:
+# Dakota deltas are gone. The remaining Dakota deltas are:
 #   CRYPTO_ZSTD forced =y: the zswap.compressor=zstd karg
 #   (bluefin/zswap-config.bst, all variants) needs the compressor
 #   built in, not =m.
+#   T2BCE_CORE and T2BCE_VHCI forced =y: the internal keyboard, trackpad and
+#   Touch Bar are devices on the T2's virtual USB controller, and the LUKS
+#   passphrase prompt needs the keyboard from vmlinuz.
 #
 # Exit condition: only drop this element in favor of components/linux.bst
 # if upstream ships CONFIG_CRYPTO_ZSTD=y (or zswap moves off the karg) and
 # zswap is re-verified on a booted image.
 kind: make
-description: freedesktop-sdk stable Linux kernel with CRYPTO_ZSTD built in
+description: freedesktop-sdk stable Linux kernel (CRYPTO_ZSTD built in, Apple T2 series)
 
 build-depends:
 - freedesktop-sdk.bst:public-stacks/buildsystem-make.bst
@@ -100,6 +120,12 @@ config:
     cp expected-configs expected-configs.orig
     while IFS= read -r cfg; do
       sym=${cfg#CONFIG_}
+      # Symbols the T2 band introduces are exempt: if the series stops
+      # providing them, the missing-config check below must fail the build
+      # rather than prune the expectation away.
+      case "$sym" in
+        T2BCE_CORE|T2BCE_VHCI|T2BCE_DMA|T2BCE_AUDIO|T2BCE_AVE|APFS_FS) continue ;;
+      esac
       if ! grep -qx "$sym" .kconfig-symbols; then
         echo "note: pruning expectation for ${cfg} (absent from this tree)" 1>&2
         sed -i "/^\(CONFIG_\)\{0,1\}${sym}$/d" expected-configs
@@ -128,6 +154,13 @@ config:
 
     # has() accepts =m; the zswap karg requires =y.
     grep -q '^CONFIG_CRYPTO_ZSTD=y$' .config
+
+    # has() also accepts =m, but the T2 keyboard, trackpad and Touch Bar are
+    # behind the T2's virtual USB controller: as modules with no initramfs
+    # allowlist entry there is no input device at the LUKS passphrase prompt,
+    # so hold both bridge drivers in vmlinuz.
+    grep -q '^CONFIG_T2BCE_CORE=y$' .config
+    grep -q '^CONFIG_T2BCE_VHCI=y$' .config
 
   install-commands:
   - |

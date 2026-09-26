@@ -1,0 +1,9 @@
+# t2linux-config 16.0.0 ships two lines here:
+#   enable get-apple-firmware.service
+#   enable t2fanrd.service
+# get-apple-firmware.service belongs to t2linux-scripts, which is out of scope:
+# it exists to extract firmware from a macOS partition at runtime, and macOS has
+# been wiped on the acceptance machine. Firmware is vendored at build time
+# instead. Presetting a unit the image does not contain would leave a dangling
+# enable line, so only the fan daemon is preset.
+enable t2fanrd.service
