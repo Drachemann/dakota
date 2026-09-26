@@ -50,6 +50,19 @@
 # method 5 extracts from an Apple Recovery Image, and "systemd-sysext" is not an
 # option because bootc does not support it.
 #
+# THE PRECEDENT IS RECENT AND CONCRETE, so do not treat this element as merely
+# conservative. The Omarchy installer redistributed exactly these bytes: its
+# fix-t2.sh installed `apple-bcm-firmware` from the arch-mact2 repo, which Omarchy
+# added unsigned (SigLevel = Never), and the package declared license=('unknown')
+# with sha256sums=('SKIP'). That channel was withdrawn in September 2026, when the
+# mirror's CI deleted the firmware tarballs and the blob package and replaced them
+# with the MIT `apple-bcm-firmware-fetcher` (which reads an on-disk macOS volume and
+# hard-fails without one). Machines installed before the withdrawal had working
+# radios; installing Omarchy afterwards fails outright, because the package no
+# longer resolves and the installer treats that as fatal. A redistribution that
+# works today can be gone next month, and the licence-clean extraction path is the
+# one that survives.
+#
 # THE FILE LIST IS A PROBE RESULT, NOT radio.tar
 #
 # radio.tar carries 163 files because it is a multi-Mac bundle: 98.4% of it
