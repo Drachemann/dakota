@@ -270,19 +270,35 @@ over "what makes Wi-Fi fail on this image", and sum to 1.00:
 
 | hypothesis | prior |
 |---|---|
-| Kernel version or kernel config alone is sufficient (firmware irrelevant) | 0.45 |
-| The vendored 2024 firmware bytes alone are causal (kernel irrelevant) | 0.20 |
+| Kernel version or kernel config alone is sufficient (firmware irrelevant) | 0.30 |
+| The vendored 2024 firmware bytes alone are causal (kernel irrelevant) | 0.35 |
 | Both must change | 0.25 |
 | Neither explains it (third cause) | 0.10 |
 
-The prior handoff had the firmware at 40-50%. The re-weighting rests on: the named
-802.1X commit landing in exactly the release the working install runs; and a
-firmware delta of 75 bytes out of 820,013 in `trinidad.bin`, all of them
-version/date/FWID strings, plus calibration data —
-cited at `docs/t2-diagnostics.md:86`, an inherited observation not re-verified
-here. **What would falsify the "firmware is nearly irrelevant" reading:** a cell B
-pass, or a byte-level diff showing the two `trinidad.bin` builds differ inside the
-firmware's own code or data regions rather than only in their embedded strings.
+The prior handoff had the firmware at 40-50%. The re-weighting initially rested on
+the named 802.1X commit landing in exactly the release the working install runs,
+plus a firmware delta described as "75 bytes of version/date/FWID strings out of
+820,013 in `trinidad.bin`". **That description was incomplete and the re-weighting
+was wrong.** Measured directly, file by file, between the two sets:
+
+| file | 2023 | 2024 | difference |
+|---|---|---|---|
+| `...trinidad.bin` | 820,013 | 820,013 | 75 bytes — version, date, FWID strings |
+| `...trinidad.clm_blob` | 35,322 | 35,478 | **29,543 bytes differ (83%), size changed** |
+| `...trinidad.txcap_blob` | 723 | 723 | 17 bytes |
+| `...trinidad-HRPN-{m,u}.txt` | — | — | identical |
+
+The `.bin` delta really is only strings. The **CLM blob is a different build**: it is
+the Country Locale Matrix, the per-domain channel and power data the firmware uses,
+and it is the largest content difference between the working and failing
+configurations. A version-string delta argues the firmware sets are
+interchangeable; an 83% CLM delta does not. The priors above reflect that
+correction and put the firmware back ahead of the kernel, reversing this document's
+earlier position. `docs/t2-diagnostics.md` now carries the same table so the
+misreading cannot recur.
+
+**What would falsify the "firmware is causal" reading:** a cell B failure together
+with a cell D pass, which would leave kernel version as the whole story.
 
 These are priors; the matrix replaces them.
 

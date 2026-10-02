@@ -87,9 +87,21 @@ in the order worth trying:
    `journalctl -fu wpa_supplicant` while reconnecting.
 4. Compare against the printed `Firmware: BCM4364/4 wl0: ...` line. The image's
    vendored set and the macOS extraction a t2linux install uses are different
-   builds: same file sizes, differing only in the embedded version, date and FWID
-   strings (75 bytes of 820,013 in `trinidad.bin`) plus calibration data in the
-   txcap blob.
+   builds, and the difference is **not** merely embedded strings. Measured between
+   the 2023 macOS set and the image's 2024 set, per file:
+
+   | file | 2023 | 2024 | difference |
+   |---|---|---|---|
+   | `...trinidad.bin` | 820,013 | 820,013 | 75 bytes, spread over offsets 406567-820009 — version, date and FWID strings (`Jul 10 2023` vs `Jul 26 2024`) |
+   | `...trinidad.clm_blob` | 35,322 | 35,478 | **29,543 bytes differ (83%), and the size changed** |
+   | `...trinidad.txcap_blob` | 723 | 723 | 17 bytes |
+   | `...trinidad-HRPN-{m,u}.txt` | — | — | identical |
+
+   The `trinidad.bin` delta really is only strings. The **CLM blob is a different
+   build**: it is the Country Locale Matrix, the per-domain channel and power
+   data, and it is the largest content difference in the set. Do not read the
+   75-byte `.bin` figure as "the firmware sets are near-identical" — that reading
+   cost one session a wrong prior on which variable was responsible.
 
 Radio-level errors accompany these failures and are worth grepping for on their
 own: `brcmf_cfg80211_scan: scan error (-52)` and the `p2p-dev-*` `add_iface`
