@@ -12,7 +12,7 @@ Signed-off-by: Aun-Ali Zaidi <admin@kodeit.net>
 ---
 
 Upstream-Status: Not-applicable [t2linux downstream series; not headed upstream in this form]
-Source: t2linux/linux-t2-patches @ fea007484b84b28acc3fd55e018345db3685ac08 (3001 hunks match the v7.2.6 applesmc.c this element pins)
+Source: t2linux/linux-t2-patches @ 9e773c8876708924dd5e0e5d3093068a0f806ea1 (KVER=7.2.7; applesmc.c is unchanged in v7.2.8)
 Exit: Drop when applesmc carries the drvdata conversion upstream.
  drivers/hwmon/applesmc.c | 540 +++++++++++++++++++++++----------------
  1 file changed, 319 insertions(+), 221 deletions(-)
@@ -969,7 +969,7 @@ index 90a14a7f2c4c..a611c98871a2 100644
  
  out:
  	pr_warn("driver init failed (ret=%d)!\n", ret);
-@@ -1225,44 +1305,55 @@ static int applesmc_create_accelerometer(void)
+@@ -1225,49 +1305,55 @@ static int applesmc_create_accelerometer(void)
  }
  
  /* Release all resources used by the accelerometer */
@@ -1008,9 +1008,9 @@ index 90a14a7f2c4c..a611c98871a2 100644
 -static int applesmc_create_key_backlight(void)
 +static int applesmc_create_key_backlight(struct applesmc_device *smc)
  {
+ 	int ret;
+ 
 -	if (!smcreg.has_key_backlight)
-+	int ret;
-+
 +	if (!smc->reg.has_key_backlight)
  		return 0;
 -	applesmc_led_wq = create_singlethread_workqueue("applesmc-led");
@@ -1018,17 +1018,18 @@ index 90a14a7f2c4c..a611c98871a2 100644
 +	smc->backlight_wq = create_singlethread_workqueue("applesmc-led");
 +	if (!smc->backlight_wq)
  		return -ENOMEM;
--	return led_classdev_register(&pdev->dev, &applesmc_backlight);
+-	ret = led_classdev_register(&pdev->dev, &applesmc_backlight);
 +
 +	INIT_WORK(&smc->backlight_work, applesmc_backlight_set);
 +	smc->backlight_dev.name = "smc::kbd_backlight";
 +	smc->backlight_dev.default_trigger = "nand-disk";
 +	smc->backlight_dev.brightness_set = applesmc_brightness_set;
 +	ret = led_classdev_register(&smc->dev->dev, &smc->backlight_dev);
-+	if (ret)
+ 	if (ret)
+-		destroy_workqueue(applesmc_led_wq);
 +		destroy_workqueue(smc->backlight_wq);
 +
-+	return ret;
+ 	return ret;
  }
  
 -static void applesmc_release_key_backlight(void)

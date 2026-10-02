@@ -13,11 +13,12 @@
 #   - numbers stay upstream's (1001 t2bce, 2008-9002 subsystems) and carry
 #     upstream's internal order; every file has its own Upstream-Status,
 #     Source and Exit headers for the next re-sync;
-#   - 3001 is the one file pinned one series revision back (fea007484b84):
-#     main's 3001 is rebased onto the applesmc.c that v7.2.7 shipped, and this
-#     element pins v7.2.6. Pre-7.2.7 3001 reaches the same end state on this
-#     tree, and main's revision of it is otherwise byte-identical to its
-#     neighbours. Re-check that pin when the kernel ref moves;
+#   - 3001 comes from the series' main revision too. It is rebased onto the
+#     applesmc.c that v7.2.7 shipped, and v7.2.7 and v7.2.8 carry identical
+#     applesmc.c, so it applies to this tree unchanged. It previously had to be
+#     held one revision back (fea007484b84) only while this element pinned
+#     v7.2.6: applesmc.c changed between v7.2.6 and v7.2.7, so the main revision
+#     did not apply. Re-check that if the kernel ref ever moves backwards;
 #   - files/linux/dakota-config.sh drives the T2 symbols, and the Kconfig
 #     entries only the band provides are exempt from the pruning pass below
 #     so that losing the band fails the build instead of quietly shipping a
@@ -243,7 +244,7 @@ sources:
   url: kernel:linux/kernel/git/stable/linux.git
   # Testing tracks the 7.2 stable series; rc kernels stay on next.
   track: v7.2.*
-  ref: v7.2.6-0-g500df175a7f9e6bc1a9c328590ca5150f84f9ff0
+  ref: v7.2.8-0-g9a66fdc0d7fd55f54235524a73435af99051e46f
 - kind: patch_queue
   path: patches/linux
 - kind: local
