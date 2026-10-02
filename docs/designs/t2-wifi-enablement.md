@@ -311,10 +311,18 @@ supposed to solve. (The same probe was first run on a 2 KB image, where timing
 cannot distinguish the cases; that run was inconclusive and is why the 271 MB run
 was done.)
 
-Consequence: at the only remaining media's measured ~6.5 MiB/s, a 4 GiB image is
-~10.5 min of USB write plus ~10.5 min of USB read on the T2. **The whole
-on-machine loop depends on fixing this**, so it is Decision 2's first task rather
-than an assumption.
+Consequence: at the ~6.5 MiB/s the SanDisk stick measured, a 4 GiB image is ~10.5
+min of USB write plus ~10.5 min of USB read on the T2.
+
+**Corrected after the review, with the media physically present.** That premise was
+wrong: it inherited the handoff's claim that the stick was the only remaining media.
+Two 931 GB external HDDs are attached — `/dev/sda1` at `/media/matt/StayHuman` with
+337 GB free, and `/dev/sdb1` at `/media/matt/FereterCopy` with 21 GB free — and a
+`dd` with `conv=fsync` measured **24 MB/s** sustained write, about 3.7x the stick. A
+4 GiB image is therefore ~3 min of write and roughly a minute of read: about **4 min
+per iteration**, not 21. The transfer route is not the blocker this section
+describes, and the `oci:` dedupe failure above is a nice-to-have rather than
+Decision 2's first task. Stage on `StayHuman`, not `FereterCopy`.
 
 **Fallbacks, in the order worth trying** (each judged by the pass criterion
 below):
@@ -590,9 +598,9 @@ whatever carries it.
 ## Next Steps
 
 1. Confirm the merge result on the branch (`just validate` already exit 0).
-2. Fix the transfer route before any build: measure one of the Decision 2(a)
-   fallbacks against the stated pass criterion. Without this the loop is
-   ~21 min/iteration.
+2. Transfer route: **resolved as a non-blocker** — see the correction in Decision
+   2(a). Use `/media/matt/StayHuman` (337 GB free) and `podman save`/`load` if the
+   `oci:` layout is inconvenient; ~4 min per iteration at the measured 24 MB/s.
 3. Run **cell B**: copy the 2023 set to the media, `mount --bind` it over
    `/usr/lib/firmware/brcm` on the image, verify the mount target is populated,
    reload `brcmfmac`, and record the `Firmware: BCM4364/4` revision line **before
