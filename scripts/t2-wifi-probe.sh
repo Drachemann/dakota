@@ -16,12 +16,16 @@
 #            key_mgmt=WPA-PSK, ieee80211w=1 -- if this connects while stage 2 does
 #            not, the image's supplicant is negotiating something the AP answers
 #            by not starting the handshake
-#   stage 4  firmware A/B: alternative blob set in /etc/firmware/brcm, loaded
-#            through brcmfmac's alternative_fw_path. The alternative set is also
-#            installed under the board-less names, so any request the driver makes
-#            resolves; the interface is verified before the test rather than
-#            assumed. If the module cannot be reloaded cleanly, the log says so
-#            and the report prints the cmdline route instead.
+#   stage 4  firmware A/B: the alternative blob set copied to a writable staging
+#            directory and bind-mounted over $FW_TARGET, a path the loader already
+#            searches. Never brcmfmac's alternative_fw_path: request_firmware()
+#            joins the requested name onto its own search path, so an absolute
+#            value resolves to /lib/firmware//... and fails -2 (three attempts
+#            died that way). The set is also installed under the board-less alias
+#            when it carries one; on BCM4364B3 no generic name exists. The
+#            interface is verified before the test rather than assumed, and the
+#            firmware revision is logged after the reload so that an override
+#            which did not take effect is VOID rather than negative evidence.
 #   stage 5  NetworkManager, secret supplied, WPS disabled, key-mgmt wpa-psk
 #   finally  restore: stock firmware, NetworkManager up, WPS property back
 #
@@ -38,11 +42,25 @@
 
 set -u
 IFACE=wlp229s0
-SSID="${WIFI_SSID:-Nakama}"
+# The network to test is always supplied by the operator: a tracked script must
+# not carry anyone's own SSID as a default, and a wrong default fails silently.
+SSID="${WIFI_SSID:-}"
+if [ -z "$SSID" ]; then
+    echo "ERROR: set WIFI_SSID to the network name to test." >&2
+    echo "       e.g. WIFI_SSID=MyNetwork sudo -E ./t2-wifi-probe.sh" >&2
+    exit 2
+fi
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ALT_FW_DIR="${1:-$HERE/fw-ubuntu}"
 OUT="${OUT:-$HERE/t2-diag}"
 RUNDIR=/run/t2-wifi-probe
+# A bind mount at a path the loader already searches, never alternative_fw_path:
+# request_firmware() joins the requested name onto its own search path, so an
+# ABSOLUTE alternative_fw_path becomes /lib/firmware//etc/firmware and fails -2
+# for a file that exists. /usr is read-only on bootc, so the target must already
+# exist in the image.
+FW_TARGET="${FW_TARGET:-/usr/lib/firmware/brcm}"
+FW_STAGE=/run/t2-wifi-probe/fw/brcm
 NM_KEYFILE="/etc/NetworkManager/system-connections/${SSID}.nmconnection"
 mkdir -p "$OUT" "$RUNDIR"
 chmod 700 "$RUNDIR"
@@ -161,9 +179,14 @@ manual_test() {
 
 restore() {
     wpa_cli -p "$RUNDIR" -i "$IFACE" terminate >/dev/null 2>&1
+    if mountpoint -q "$FW_TARGET"; then umount "$FW_TARGET" >/dev/null 2>&1; fi
     modprobe -r brcmfmac_wcc brcmfmac 2>/dev/null
     modprobe brcmfmac 2>/dev/null
-    rm -rf /etc/firmware/brcm
+    rm -rf /etc/firmware/brcm "$FW_STAGE"
+    # The passphrase must not survive the run on ANY exit path. This used to be
+    # deleted only on the fall-through at the end, so the four early exits left
+    # /run/t2-wifi-probe/passwd behind for the machine's uptime.
+    rm -f "$RUNDIR/passwd" "$RUNDIR/wpa.conf" "$RUNDIR/wpa-explicit.conf"
     systemctl start NetworkManager >/dev/null 2>&1
 }
 trap restore EXIT
@@ -186,37 +209,46 @@ if manual_test "stage 3 (pinned negotiation)" "$RUNDIR/wpa-explicit.conf" pinned
     exit 0
 fi
 
-echo "--- stage 4: alternative firmware through alternative_fw_path" >>"$LOG"
+echo "--- stage 4: alternative firmware via a bind mount over $FW_TARGET" >>"$LOG"
 if [ ! -d "$ALT_FW_DIR" ]; then
     msg "stage 4 skipped: no alternative blob set at $ALT_FW_DIR"
 elif ! modprobe -r brcmfmac_wcc brcmfmac 2>>"$LOG"; then
     msg "stage 4 skipped: could not unload brcmfmac (something still holds $IFACE)"
 else
-    mkdir -p /etc/firmware/brcm
-    # Install each blob under its own name and under the board-less name, so a
-    # request for either resolves to the alternative set.
+    rm -rf "$FW_STAGE"
+    install -d -m 755 "$FW_STAGE"
+    n=0
+    # Install each blob under its own name and under the board-less alias, so a
+    # request for either resolves to the alternative set. (On BCM4364B3 no generic
+    # brcmfmac4364b3-pcie.bin exists, so the alias is normally absent.)
     for f in "$ALT_FW_DIR"/*; do
+        [ -f "$f" ] || continue
         b=$(basename "$f")
-        install -Dm644 "$f" "/etc/firmware/brcm/$b"
+        install -Dm644 "$f" "$FW_STAGE/$b"; n=$((n + 1))
         g=$(printf '%s' "$b" | sed 's/\.apple,trinidad//')
-        [ "$g" != "$b" ] && install -Dm644 "$f" "/etc/firmware/brcm/$g"
+        [ "$g" != "$b" ] && install -Dm644 "$f" "$FW_STAGE/$g"
     done
-    run ls -la /etc/firmware/brcm
-    if ! modprobe brcmfmac alternative_fw_path=/etc/firmware 2>>"$LOG"; then
-        msg "stage 4 skipped: reloading brcmfmac with alternative_fw_path failed"
+    run ls -la "$FW_STAGE"
+    if [ "$n" -eq 0 ]; then
+        msg "stage 4 skipped: $ALT_FW_DIR contains no files"
+    elif [ ! -d "$FW_TARGET" ]; then
+        msg "stage 4 skipped: override target $FW_TARGET does not exist on this root."
+        msg "        /usr is read-only on bootc; set FW_TARGET to an existing searched"
+        msg "        directory (e.g. /lib/firmware/updates/brcm on a writable root)."
+    elif ! mount --bind "$FW_STAGE" "$FW_TARGET" 2>>"$LOG"; then
+        msg "stage 4 skipped: bind mount onto $FW_TARGET failed"
     else
+        modprobe brcmfmac 2>>"$LOG"
         sleep 8
         echo "--- stage 4: kernel messages during the reload" >>"$LOG"
         journalctl -k --since "-4 min" --no-pager 2>&1 \
             | grep -aiE "brcmfmac|firmware|wlp229s0|cfg80211" | redact >>"$LOG"
+        # Confirm the override actually took effect before reading any result: if
+        # the revision line is unchanged the run is VOID, not negative evidence.
+        rev=$(journalctl -k --since "-4 min" --no-pager 2>/dev/null | sed -n 's/.*Firmware: BCM4364\/4 //p' | tail -1)
+        echo "--- stage 4: firmware revision after reload: ${rev:-<none>}" >>"$LOG"
         if [ ! -e "/sys/class/net/$IFACE" ]; then
             msg "stage 4 inconclusive: the interface did not come back after the reload."
-            msg "        Use the cmdline route instead: put the alternative blobs in"
-            msg "        /etc/firmware/brcm, then edit the boot entry at the systemd-boot"
-            msg "        menu (e) and append"
-            msg "          brcmfmac.alternative_fw_path=/etc/firmware"
-            msg "        Boot that entry once and check 'Firmware: BCM4364/4 wl0:' in dmesg"
-            msg "        shows the older revision before retrying the connection."
         elif manual_test "stage 4 (alternative firmware)" "$RUNDIR/wpa.conf" altfw; then
             msg "RESULT: CONNECTED only with the alternative firmware blob set -> this"
             msg "        image's vendored blobs are the fault; swap the blob source in"
@@ -246,8 +278,11 @@ run nmcli con mod "$SSID" 802-11-wireless-security.wps-method 0
 msg "RESULT: no path connects. Stage 2/3 summaries say whether the AP ever starts"
 msg "        the handshake (RX EAPOL-Key) and which key management was used. With"
 msg "        RX=0 in every stage, the remaining implementation difference from the"
-msg "        working install is the kernel: brcmfmac 7.2.6 here, 7.2.8 there, and"
-msg "        the t2 patch series itself targets 7.2.7 -- a kernel bump is the next"
-msg "        candidate, and it does not need any of this diagnostic plumbing."
-rm -f "$RUNDIR/passwd"
+msg "        working install is the kernel: brcmfmac 7.2.6 here, 7.2.8 there."
+msg "        Do NOT target 7.2.7: it carries the same brcmfmac as 7.2.6 (newest"
+msg "        commit f26e1b1690 in both) and would move nothing on the radio. 7.2.8"
+msg "        is the target: it adds c5f73cde72 'fix lost 802.1x TX completion"
+msg "        wakeup'. Settle firmware against kernel with the bind-mount 2x2 in"
+msg "        docs/t2-wifi-handoff.md before spending a build."
+# passwd is removed by restore() on every exit path, including this one.
 exit 0

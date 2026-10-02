@@ -24,41 +24,46 @@
 
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
-STATE="$HERE/.t2-phase"
 DIAG="$HERE/t2-diag"
 SUMMARY="$DIAG/summary.txt"
 WIFILOG="$DIAG/wifi-tests.txt"
 ALT_FW_SET="$HERE/fw-ubuntu"
 HASHES="$HERE/wifi-stack-hashes.expected"
-FWDIR=/var/firmware-alt/brcm
-MODPROBE=/etc/modprobe.d/brcmfmac-altfw.conf
-# The blobs live in /var (a persistent subvolume), but the firmware loader runs
-# before /var and /etc are mounted: with alternative_fw_path=/var/firmware-alt the
-# driver asked for a file that exists and got -2, and the same reason explains why
-# /etc/modprobe.d never took effect. /sysroot comes from the initramfs, so the
-# same directory is reachable there before any module loads.
-ALT_ROOT=/var/firmware-alt
-# -T collapses into -Tno and findmnt then rejects the path argument; --target is
-# the form that works. FSROOT is /state/os/default/var on a composefs deployment
-# and / if /var is not a separate mount, in which case fall back to the layout
-# this image actually uses.
-_fsroot=$(findmnt -no FSROOT --target /var 2>/dev/null)
-case "$_fsroot" in ""|"/") _fsroot=/state/os/default/var ;; esac
-ALT_PATH="/sysroot${_fsroot}/firmware-alt"
-IFACE=wlp229s0
-SSID="${WIFI_SSID:-Nakama}"
+# The firmware override is a bind mount at a path the loader already searches,
+# never brcmfmac's alternative_fw_path. request_firmware() always joins the
+# requested name onto its own search path, so an ABSOLUTE alternative_fw_path
+# resolves to /lib/firmware//sysroot/... and fails -2 for a file that exists.
+# Three attempts died that way (modprobe.d, the kernel cmdline, and /var plus
+# /sysroot), which is why this script no longer stages onto that route at all.
+#
+# /usr/lib/firmware/brcm exists in the deployment, and /usr is read-only on bootc
+# so mkdir cannot create a path there; a bind mount over the existing directory
+# works. On a writable root (the t2linux Ubuntu install) the loader-preferred
+# /lib/firmware/updates/brcm is available instead.
+FW_TARGET="${FW_TARGET:-/usr/lib/firmware/brcm}"
+FW_STAGE=/run/t2-tests/fw/brcm
+IFACE="${IFACE:-wlp229s0}"
+# Supplied by the operator: a tracked script must not carry anyone's own SSID as
+# a default, and a wrong default fails silently and reads as a radio fault.
+SSID="${WIFI_SSID:-}"
 RUNDIR=/run/t2-tests
 NM_KEYFILE="/etc/NetworkManager/system-connections/${SSID}.nmconnection"
 MODE="${1:---auto}"
-PHASE="$(cat "$STATE" 2>/dev/null || echo stock)"
-
-mkdir -p "$DIAG" 2>/dev/null || true
-mkdir -p "$RUNDIR" 2>/dev/null || true
-chmod 700 "$RUNDIR" 2>/dev/null || true
-: >"$WIFILOG" 2>/dev/null || true
 
 PSK=""
-redact() { if [ -n "${PSK}" ]; then sed "s|${PSK}|<redacted-passphrase>|g"; else cat; fi; }
+# Fixed-string replacement, not sed: a passphrase containing '|' or '\' would
+# break or silently alter a sed expression, and a redactor that fails open is
+# worse than none. ${var//pat/repl} with a quoted pattern is literal in bash.
+redact() {
+    if [ -n "${PSK}" ]; then
+        local _line
+        while IFS= read -r _line || [ -n "$_line" ]; do
+            printf '%s\n' "${_line//"$PSK"/<redacted-passphrase>}"
+        done
+    else
+        cat
+    fi
+}
 say() { echo "$*" | redact | tee -a "$SUMMARY" | tee -a "$WIFILOG" >/dev/null; }
 wlog() { echo "$*" | redact >>"$WIFILOG"; }
 run() { { echo "\$ $*"; "$@" 2>&1; echo "(exit $?)"; } | redact >>"$WIFILOG"; }
@@ -71,12 +76,12 @@ firmware_revision() {
     journalctl -k -b --no-pager 2>/dev/null | sed -n 's/.*Firmware: BCM4364\/4 //p' | tail -1
 }
 
-# --check: prove the kit on the media is complete and report the plan, without
-# touching anything. Run it once before the first reboot.
+# --check: prove the kit on the media is complete and report the plan. It returns
+# before any of the side effects below, so it genuinely touches nothing.
 if [ "$MODE" = "--check" ]; then
     rc=0
     echo "media: $HERE"
-    echo "phase file: $STATE -> $PHASE"
+    if [ -d "$FW_TARGET" ]; then echo "  ok      override target $FW_TARGET"; else echo "  MISSING override target $FW_TARGET"; rc=1; fi
     for f in runlogs.sh fw-ubuntu wifi-stack-hashes.expected; do
         if [ -e "$HERE/$f" ]; then echo "  ok      $f"; else echo "  MISSING $f"; rc=1; fi
     done
@@ -89,8 +94,23 @@ if [ "$MODE" = "--check" ]; then
     else
         echo "  note    no stored passphrase; the run will prompt for it"
     fi
-    echo "plan: phase $PHASE; then $([ "$PHASE" = stock ] && echo 'stage alternative firmware and reboot' || echo 'revert staging and finish')"
+    echo "plan: read the image firmware, bind-mount the media set at $FW_TARGET, reload"
+    echo "      brcmfmac, read again, unmount. Single pass, no reboot."
     exit "$rc"
+fi
+
+# Side effects start here, below the --check return, so --check is genuinely
+# read-only instead of truncating the previous run's log on its way past.
+mkdir -p "$DIAG" 2>/dev/null || true
+mkdir -p "$RUNDIR" 2>/dev/null || true
+chmod 700 "$RUNDIR" 2>/dev/null || true
+: >"$WIFILOG" 2>/dev/null || true
+
+if [ -z "$SSID" ]; then
+    echo "ERROR: set WIFI_SSID to the network name to test." >&2
+    echo "       e.g. WIFI_SSID=MyNetwork sudo -E ./run-tests.sh" >&2
+    echo "       A tracked script must not carry someone else's SSID as a default." >&2
+    exit 2
 fi
 
 # ---------------------------------------------------------------- passphrase
@@ -115,36 +135,6 @@ esac
       "$RUNDIR" "$SSID" "$PSK_LINE" >"$RUNDIR/wpa.conf"
   printf '802-11-wireless-security.psk:%s\n' "$PSK" >"$RUNDIR/passwd"
 )
-# System-owned keyfile, so a root shell can activate the connection without an
-# agent. Writing it directly also avoids putting the secret on a command line.
-write_nm_keyfile() {
-    ( umask 077
-      cat >"$NM_KEYFILE" <<EOF
-[connection]
-id=$SSID
-type=wifi
-interface-name=$IFACE
-
-[wifi]
-mode=infrastructure
-ssid=$SSID
-
-[wifi-security]
-key-mgmt=wpa-psk
-psk=$PSK
-psk-flags=0
-
-[ipv4]
-method=auto
-
-[ipv6]
-method=auto
-EOF
-    )
-    chmod 600 "$NM_KEYFILE"
-    nmcli con reload >/dev/null 2>&1
-}
-
 # ---------------------------------------------------------------- wi-fi tests
 supplicant_test() {
     local label="$1" rx tx st km best="" i
@@ -229,10 +219,9 @@ collect() {
     say ""
     say "=== $label"
     say "firmware: $(firmware_revision)"
-    say "alt fw path in effect: '$(cat /sys/module/brcmfmac/parameters/alternative_fw_path 2>/dev/null)'"
-    say "alt fw staged: $(find "$ALT_ROOT" -maxdepth 2 -type f 2>/dev/null | wc -l) file(s) in $ALT_ROOT"
-    say "alt fw reachable at load time: $([ -d "$ALT_PATH/brcm" ] && echo "yes ($ALT_PATH)" || echo "NO ($ALT_PATH)")"
-    say "cmdline: $(tr ' ' '\n' </proc/cmdline | grep -c brcmfmac.alternative_fw_path) parameter(s)"
+    say "override target: $FW_TARGET $([ -d "$FW_TARGET" ] && echo '(exists)' || echo '(MISSING)')"
+    say "override mounted: $(mountpoint -q "$FW_TARGET" && echo "yes ($(find "$FW_TARGET" -maxdepth 1 -type f 2>/dev/null | wc -l) staged file(s))" || echo no)"
+    say "staged set: $ALT_FW_SET ($(find "$FW_STAGE" -maxdepth 1 -type f 2>/dev/null | wc -l) file(s) in $FW_STAGE)"
     say "uptime: $(cut -d' ' -f1 /proc/uptime)s"
     wifi_stack_integrity
     say "--- boot diagnostics (harness)"
@@ -255,102 +244,93 @@ collect() {
     return 1
 }
 
+# Copy the media's blob set into a writable staging directory and bind-mount it
+# over a path the firmware loader already searches. This replaces the
+# alternative_fw_path route entirely; see the note on FW_TARGET above.
 stage_alt_firmware() {
-    install -d -m 755 "$FWDIR"
+    local n
+    [ -d "$ALT_FW_SET" ] || { say "    ERROR: $ALT_FW_SET does not exist on the media."; return 1; }
+    rm -rf "$FW_STAGE"
+    install -d -m 755 "$FW_STAGE"
     for f in "$ALT_FW_SET"/*; do
+        [ -f "$f" ] || continue
         local b g
         b=$(basename "$f")
-        install -Dm644 "$f" "$FWDIR/$b"
+        install -Dm644 "$f" "$FW_STAGE/$b"
+        # brcmfmac falls back to the board-less name. On BCM4364B3 no generic
+        # brcmfmac4364b3-pcie.bin exists (see elements/bluefin/t2-brcm-firmware.bst),
+        # but stage the alias when the set carries one so a partial set cannot
+        # silently prove nothing.
         g=$(printf '%s' "$b" | sed 's/\.apple,trinidad//')
-        [ "$g" != "$b" ] && install -Dm644 "$f" "$FWDIR/$g"
+        [ "$g" != "$b" ] && install -Dm644 "$f" "$FW_STAGE/$g"
     done
-    # Kernel cmdline, not modprobe.d: this boot proved /etc/modprobe.d is not in
-    # effect when brcmfmac loads, while modprobe always reads /proc/cmdline.
-    if ! esp=$(find_esp); then
-        say "    WARNING: no ESP found; cannot add the cmdline parameter"
+    # Count files, not the directory: install -d satisfies a -d test on its own, so
+    # a -d gate passed on an empty set and reported a firmware failure that was
+    # really an empty medium.
+    n=$(find "$FW_STAGE" -maxdepth 1 -type f 2>/dev/null | wc -l)
+    [ "$n" -gt 0 ] || { say "    ERROR: $ALT_FW_SET contains no files; nothing staged."; return 1; }
+    [ -d "$FW_TARGET" ] || {
+        say "    ERROR: override target $FW_TARGET does not exist. /usr is read-only on"
+        say "    bootc, so the target must already be in the image. Set FW_TARGET to an"
+        say "    existing searched directory (e.g. /lib/firmware/updates/brcm on a"
+        say "    writable root) and re-run."
         return 1
-    fi
-    local entry
-    entry=$(ls "$esp"/loader/entries/*.conf 2>/dev/null | head -1)
-    [ -n "$entry" ] || { say "    WARNING: no boot entry under $esp/loader/entries"; return 1; }
-    cp -a "$entry" "$HERE/$(basename "$entry").backup"
-    grep -q 'brcmfmac.alternative_fw_path' "$entry" && { echo altfw >"$STATE"; return 0; }
-    sed -i "s|^options |options brcmfmac.alternative_fw_path=$ALT_PATH |" "$entry"
-    say "    boot entry $(basename "$entry") now carries brcmfmac.alternative_fw_path=$ALT_PATH"
-    say "    (backup kept on the media as $(basename "$entry").backup)"
-    if [ ! -d "$ALT_PATH/brcm" ]; then
-        say "    ERROR: $ALT_PATH/brcm is not reachable, so the driver would still get -2."
-        say "    mount layout: $(findmnt -no SOURCE,FSROOT --target /var 2>/dev/null)"
-        say "    staging kept; entry restored; not rebooting."
-        return 1
-    fi
-    echo altfw >"$STATE"
-    sync
+    }
+    mount --bind "$FW_STAGE" "$FW_TARGET" || { say "    ERROR: bind mount onto $FW_TARGET failed."; return 1; }
+    say "    staged $n blob(s) from $ALT_FW_SET, bind-mounted over $FW_TARGET"
     return 0
 }
 
-find_esp() {
-    local d
-    for d in /boot /boot/efi /efi; do
-        [ -d "$d/loader/entries" ] && { echo "$d"; return 0; }
-    done
-    mkdir -p /mnt/t2esp
-    if mount -L EFI-SYSTEM /mnt/t2esp 2>/dev/null; then echo /mnt/t2esp; return 0; fi
-    return 1
+reload_brcmfmac() {
+    # A reload is only safe when the firmware it asks for resolves: with a valid
+    # path it re-probes, and with a broken one the driver dies and takes the radio
+    # with it. The bind mount above is the validity check; the revision line in the
+    # next collect is the confirmation.
+    say "    reloading brcmfmac"
+    modprobe -r brcmfmac_wcc 2>/dev/null || true
+    if ! modprobe -r brcmfmac 2>/dev/null; then
+        say "    WARNING: brcmfmac would not unload; the next reading may still show the image firmware."
+        return 1
+    fi
+    sleep 2
+    modprobe brcmfmac 2>/dev/null || true
+    sleep 3
+    say "    firmware after reload: $(firmware_revision)"
+    return 0
 }
 
 revert_alt_firmware() {
-    local esp entry
-    if esp=$(find_esp); then
-        entry=$(ls "$esp"/loader/entries/*.conf 2>/dev/null | head -1)
-        # Restore the backed-up entry verbatim: simpler and safer than editing the
-        # options line back out.
-        if [ -n "$entry" ] && [ -f "$HERE/$(basename "$entry").backup" ]; then
-            cp -a "$HERE/$(basename "$entry").backup" "$entry"
-            say "    boot entry $(basename "$entry") restored from backup"
-        else
-            [ -n "$entry" ] && sed -i "s| *brcmfmac.alternative_fw_path=$ALT_PATH||" "$entry"
-        fi
+    # /usr is read-only and no boot entry or modprobe.d file was touched, so the
+    # unmount is the whole revert, and a reboot clears it regardless.
+    if mountpoint -q "$FW_TARGET"; then
+        umount "$FW_TARGET" && say "    $FW_TARGET unmounted" || say "    WARNING: umount $FW_TARGET failed"
     fi
-    rm -rf "$ALT_ROOT"
-    rm -f "$MODPROBE"
-    echo stock >"$STATE"
+    rm -rf "$FW_STAGE"
+    modprobe -r brcmfmac_wcc 2>/dev/null || true
+    modprobe -r brcmfmac 2>/dev/null || true
+    sleep 2
+    modprobe brcmfmac 2>/dev/null || true
     sync
 }
 
-# ---------------------------------------------------------------- phases
-case "$PHASE" in
-stock)
-    say "=== phase 1 (image firmware)"
-    collect "stock firmware" || true
-    say ""
-    say "--- staging the alternative firmware for phase 2"
-    if ! stage_alt_firmware; then
-        say "RESULT: staging failed, nothing rebooted. Send this summary."
-        exit 1
-    fi
-    say "    blobs installed in $FWDIR, option written to $MODPROBE"
-    say "    (phase 2 will remove both again after testing)"
-    if [ "$MODE" = "--no-reboot" ]; then
-        say "RESULT: staged, not rebooting (--no-reboot). Reboot, then run again."
-        exit 0
-    fi
-    say "RESULT: rebooting in 15 s to load the alternative firmware; Ctrl-C to abort"
-    sleep 15
-    systemctl reboot
-    ;;
-altfw)
-    say "=== phase 2 (alternative firmware)"
-    collect "alternative firmware" || true
-    say ""
-    say "--- reverting the staging so the next boot is stock again"
-    revert_alt_firmware
-    say "RESULT: cycle complete. Reboot when convenient; send t2-diag/summary.txt"
-    ;;
-*)
-    say "state file $STATE is unreadable ('$PHASE'); falling back to stock phase"
-    echo stock >"$STATE"
+# ---------------------------------------------------------------- run
+# Single pass, no reboot. The two-phase design existed only because
+# alternative_fw_path has to be applied at boot; a bind mount applies live.
+say "=== baseline (image firmware)"
+collect "image firmware" || true
+say ""
+say "--- staging the alternative firmware for the second reading"
+if ! stage_alt_firmware; then
+    say "RESULT: staging failed; the image-firmware reading above stands unchanged."
     exit 1
-    ;;
-esac
+fi
+say "--- reloading brcmfmac onto the staged set"
+reload_brcmfmac || true
+say ""
+collect "alternative firmware ($ALT_FW_SET)" || true
+say ""
+say "--- reverting the staging"
+revert_alt_firmware
+say "RESULT: both readings are in this summary. Compare the 'firmware:' lines:"
+say "        if they are identical the override did not take effect and this run is VOID."
 exit 0

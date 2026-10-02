@@ -27,3 +27,10 @@ debug-session/
 files/xattr-db/
 files/fakecap/fakecap-restore
 files/fakecap/fakecap.so
+.gbrain-source
+.gbrain-owner.json
+
+# T2 working notes. docs/t2-wifi-handoff.md carries "not for publication / do not
+# commit" in its own header and holds machine-specific evidence, so it is a local
+# note rather than repo content. The durable parts live in docs/t2-diagnostics.md.
+docs/t2-wifi-handoff.md

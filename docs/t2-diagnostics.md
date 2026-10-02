@@ -13,8 +13,11 @@ half of that loop, and this document is the key to reading its output.
 3. `sudo ./t2-boot-diagnostics.sh` — it writes `./t2-diag/all.txt` (override with
    `OUT=`) and prints its `VERDICT` section.
 
-Read the verdict first. Every check that can hang is bounded by `timeout`, so a
+Read the verdict first. The checks that can hang are bounded by `timeout`, so a
 stalled capture is itself a finding rather than a reason to interrupt the script.
+The bound is not universal: it covers the `t()`-wrapped calls and the fs-verity
+locator, while the surrounding `journalctl`, `nmcli` and `lsblk` calls are
+unbounded and can still stall on an unresponsive device.
 
 ## Failure modes that belong to this image
 
@@ -71,12 +74,14 @@ in the order worth trying:
    reports it the same way as a radio problem.
 2. Run `scripts/t2-wifi-probe.sh` from the boot media. It stops NetworkManager and
    drives `wpa_supplicant` directly, then repeats with a different firmware blob
-   set through `brcmfmac`'s `alternative_fw_path`. Its two exit meanings are the
-   whole point: connecting with the supplicant alone puts the fault in
-   NetworkManager's activation flow (this image runs NetworkManager 1.58, which
-   enters WPS-PBC on every activation — the working t2linux install's 1.46 does
-   not), and connecting only with the second blob set puts it in the image's
-   vendored firmware.
+   set bind-mounted over a path the loader searches. Its exit codes are **not** the
+   result: exit 0 covers "connected at stage 2", "connected at stage 3", "connected
+   at stage 4", "connected at stage 5" and "nothing connected at all", so read the
+   `RESULT:` lines instead. The discriminating readings are the stage 2/3 summaries:
+   connecting with the supplicant alone puts the fault in NetworkManager's
+   activation flow (this image runs NetworkManager 1.58, which enters WPS-PBC on
+   every activation — the working t2linux install's 1.46 does not), and connecting
+   only with the second blob set puts it in the image's vendored firmware.
 3. Constrain the negotiation and watch the supplicant:
    `nmcli con mod <name> 802-11-wireless-security.key-mgmt wpa-psk` then
    `journalctl -fu wpa_supplicant` while reconnecting.
@@ -97,25 +102,41 @@ the scans, marked `(scanning)`.
 
 Two mechanics that cost test cycles, worth knowing before instrumenting again:
 
-- **Firmware can be overridden, but only from inside the search path.**
-  `alternative_fw_path` must not be absolute: `request_firmware()` always joins the
-  requested name onto its own search path, so `/sysroot/...` becomes
-  `/lib/firmware//sysroot/...` and the load fails with `-2` (ENOENT) for a file that
-  is plainly present. `/lib/firmware/updates/` is searched *before*
-  `/lib/firmware/`, so a bind mount there overrides the image's blobs and reverts on
-  reboot:
+- **Firmware can be overridden with a bind mount, but not through
+  `alternative_fw_path`.** `alternative_fw_path` must not be absolute:
+  `request_firmware()` always joins the requested name onto its own search path, so
+  `/sysroot/...` becomes `/lib/firmware//sysroot/...` and the load fails with `-2`
+  (ENOENT) for a file that is plainly present. Three staged attempts failed exactly
+  this way, and so did the `/etc/modprobe.d` route.
+
+  Mount the alternative set over a directory the loader already searches. On the
+  image, `/lib` is a symlink to `/usr/lib` and `/usr` is a read-only mount inside
+  the deployment, so `mkdir -p /lib/firmware/updates` cannot succeed and the mount
+  target has to be a directory the image already ships:
+
+      # the image (read-only /usr): replace the whole brcm directory
+      sudo mount --bind "$ALT_BLOBS" /usr/lib/firmware/brcm
+      sudo modprobe -r brcmfmac_wcc brcmfmac && sudo modprobe brcmfmac
+      journalctl -k -b | grep "Firmware: BCM" | tail -1
+      sudo umount /usr/lib/firmware/brcm
+
+  On a writable root (a t2linux Ubuntu install) the loader-preferred `updates/`
+  path is available instead, and is searched *before* `/lib/firmware`:
 
       sudo mkdir -p /lib/firmware/updates/brcm
       sudo mount --bind "$ALT_BLOBS" /lib/firmware/updates/brcm
-      sudo modprobe -r brcmfmac_wcc brcmfmac && sudo modprobe brcmfmac
-      journalctl -k -b | grep "Firmware: BCM" | tail -1
 
-  Stage both the board-specific and the board-less names, and confirm the revision
-  in that last line before testing anything: if it does not change, the override did
-  not take effect. A `modprobe.d` option does not apply at boot on this image — the
-  module loads before the deployment's `/etc` is visible — while a module parameter
-  on the kernel command line does. Reload only when the path resolves: with valid
-  firmware the radio re-probes, and with a broken one the driver dies
+  Stage the board-specific names, `brcmfmac4364b3-pcie.apple,trinidad.*`. On
+  BCM4364B3 there is no generic `brcmfmac4364b3-pcie.bin` for the driver to fall
+  back to, so the board-less alias does not apply on this chassis; stage it only if
+  a given set actually carries one. Confirm the mount is populated before reloading.
+
+  Then confirm the revision in that last line before testing anything: if it does
+  not change, the override did not take effect and the run is **void**, not negative
+  evidence. A `modprobe.d` option does not apply at boot on this image — the module
+  loads before the deployment's `/etc` is visible — while a module parameter on the
+  kernel command line does. Reload only when the path resolves: with valid firmware
+  the radio re-probes, and with a broken one the driver dies
   (`brcmf_pcie_setup: Dongle setup failed`, then `brcmf_fw_crashed`) and the
   interface never returns.
 - **The connection's secret is agent-owned.** A root shell has no

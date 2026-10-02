@@ -21,6 +21,12 @@
 OUT="${OUT:-./t2-diag}"
 mkdir -p "$OUT"
 
+# The saved NetworkManager connection to inspect. Supplied by the operator: a
+# tracked script must not carry anyone's own SSID, and this file is collected into
+# a report that gets shared. Unset means the section is skipped.
+WIFI_SSID="${WIFI_SSID:-}"
+IFACE="${IFACE:-wlp229s0}"
+
 # Never let one unresponsive command hold the whole capture; never let a missing
 # privileged command abort it.
 T=20
@@ -98,7 +104,11 @@ t() { timeout "$T" "$@" 2>&1 || echo "(timeout/failure: $*)"; }
   echo "--- visible access points"
   t nmcli -f SSID,CHAN,FREQ,SIGNAL,SECURITY dev wifi list
   echo "--- saved connection: security settings (key-mgmt 'wpa-psk' is what works on this AP)"
-  nmcli -f 802-11-wireless-security.key-mgmt,802-11-wireless-security.pmf,802-11-wireless-security.auth-alg con show Nakama 2>&1
+  if [ -n "$WIFI_SSID" ]; then
+    nmcli -f 802-11-wireless-security.key-mgmt,802-11-wireless-security.pmf,802-11-wireless-security.auth-alg con show "$WIFI_SSID" 2>&1
+  else
+    echo "(WIFI_SSID unset: skipping the saved-connection dump; re-run with WIFI_SSID=<name> to include it)"
+  fi
   echo "--- association outcome (look for 'Associated with' then a 4-way handshake result)"
   journalctl -b -u wpa_supplicant --no-pager 2>&1 | grep -iE "Trying to associate|Associated with|Authentication with|Handshake|reason=|SSID-TEMP-DISABLED|WPS" | tail -30
   echo "--- NetworkManager activation failures"
@@ -237,10 +247,44 @@ t() { timeout "$T" "$@" 2>&1 || echo "(timeout/failure: $*)"; }
   else
       verdict "BT advertising (patch 9002)" "PASS"
   fi
-  if nmcli -t -f GENERAL.STATE dev show wlp229s0 2>/dev/null | grep -q "100 (connected)"; then
-      verdict "Wi-Fi connected" "PASS"
+  # Wi-Fi is three checks, not one. Association is what already succeeds in the
+  # T2 failure being chased, so a single "connected" check cannot tell a working
+  # radio from that bug. See docs/t2-diagnostics.md, "Wi-Fi on this chassis".
+  if nmcli -t -f GENERAL.STATE dev show "$IFACE" 2>/dev/null | grep -q "100 (connected)"; then
+      verdict "wifi-assoc" "PASS"
   else
-      verdict "Wi-Fi connected" "FAIL/NOT ATTEMPTED (see section 4)"
+      verdict "wifi-assoc" "FAIL/NOT ATTEMPTED (see section 4)"
+  fi
+
+  # Handshake stage. NetworkManager's own supplicant owns the interface, so read it
+  # through its control socket; the journal is the fallback and records the same
+  # completion without the socket. The RX/TX EAPOL-Key counters are deliberately
+  # NOT read here: they exist only in a standalone supplicant's debug log, which
+  # means stopping NetworkManager, and that cannot coexist with wifi-assoc in one
+  # passive pass. t2-wifi-probe.sh is where those counters come from.
+  hs_src=""; hs_state=""
+  hs_state=$(timeout "$T" wpa_cli -i "$IFACE" status 2>/dev/null | sed -n 's/^wpa_state=//p')
+  if [ -n "$hs_state" ]; then
+      hs_src="wpa_cli"
+  elif journalctl -b --no-pager 2>&1 | grep -qE "WPA: Key negotiation completed|CTRL-EVENT-CONNECTED"; then
+      hs_state=COMPLETED; hs_src="journal"
+  fi
+  case "$hs_state" in
+      COMPLETED) verdict "wifi-handshake" "PASS ($hs_src: wpa_state=COMPLETED)" ;;
+      "")        verdict "wifi-handshake" "FAIL/NOT ATTEMPTED (no supplicant state and no handshake in the journal)" ;;
+      *)         verdict "wifi-handshake" "FAIL ($hs_src: wpa_state=$hs_state; associated but the four-way handshake did not complete)" ;;
+  esac
+
+  # Traffic stage: the only check that shows the radio carries payload, which is
+  # what "Wi-Fi works" means. Plain HTTP on purpose -- the T2's clock reads 2011
+  # until NTP, so an HTTPS target could fail certificate validation and be
+  # mistaken for a Wi-Fi failure. The body is a fixed token, so a captive portal or
+  # a DNS failure records as a distinguishable failure rather than a silent one.
+  pay_body=$(timeout "$T" curl -fsS --max-time 15 http://detectportal.firefox.com/success.txt 2>/dev/null)
+  if [ "$pay_body" = "success" ]; then
+      verdict "wifi-payload" "PASS (HTTP fetch over $IFACE returned 'success')"
+  else
+      verdict "wifi-payload" "FAIL (HTTP fetch returned '${pay_body:-<empty or error>}'; see section 4)"
   fi
   if journalctl -b -k --no-pager 2>&1 | grep -q "FILE CORRUPTED"; then
       verdict "boot media integrity" "FAIL (fs-verity mismatch; see section 9)"
