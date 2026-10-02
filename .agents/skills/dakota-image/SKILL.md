@@ -48,6 +48,7 @@ Use this skill when filesystem content crosses from BuildStream artifacts into O
 - **Evidence Before Assertion**: Never assert boot success without executing one of the boot test recipes.
 - **Ownership Validation Needs an Unlabelled Host**: `just export` validates the squashed root through a live `podman image mount`, and `scripts/ownership_metadata.py rebind-exported` compares `xattrs` exactly. On an SELinux-enforcing host that mount exposes `security.selinux` on files whose sidecar recorded `xattrs: {}`, so the export aborts at `os-release export change is not an allowed VERSION_ID/IMAGE_VERSION substitution`. The identical comparison fails `scripts.test_ownership_metadata.test_oci_finalization_and_immutable_image_rebinding` under `just validate`. CI runs on `ubuntu-*` runners, which carry no SELinux, so this never reproduces upstream. Permissive mode is not a remedy: SELinux labels inodes and mount accesses regardless of enforcement, which only governs denials.
 - **Validation Aborts Do Not Corrupt the Image**: The export squashes and tags before it validates. A validation abort leaves `IMAGE_NAME:IMAGE_TAG` present in Podman, which is all `just generate-bootable-image` requires. Only the regenerated ownership TSV, consumed by the publishing path rather than by boot, is absent.
+- **Ownership Validation Is Also Sensitive to the Host Umask**: `_os_release_change` compares `mode` exactly, and the fixture in `scripts/test_ownership_metadata.py` creates its `usr/lib/os-release` with the host umask applied (0o664 under umask 002). Extraction through `tarfile`'s `data` filter masks group/other write bits (`mode & 0o755`, turning 0o664 into 0o644), so `test_oci_finalization_and_immutable_image_rebinding` fails under `just validate` on a host whose umask is not 022 — a different cause from the SELinux case above, with no SELinux present, and reproducible on a pristine tree at the base commit. Run `just validate` and `just export` under `umask 022`.
 
 ## Common Rationalizations
 
@@ -65,6 +66,7 @@ Use this skill when filesystem content crosses from BuildStream artifacts into O
 - Using `rpm-ostree` or `dnf` in layer integration scripts
 - Modifying live installer code directly in Dakota instead of upstream repos
 - Treating an ownership-validation abort on an SELinux host as image corruption, or concluding the branch is unbuildable from it
+- Judging the ownership comparison broken when the failure is only the host umask, or running `just validate`/`just export` with a umask other than 022
 
 ## Verification
 
@@ -79,6 +81,7 @@ Use this skill when filesystem content crosses from BuildStream artifacts into O
 
 - [`docs/oci-assembly.md`](../../../docs/oci-assembly.md)
 - [`docs/t2-recovery.md`](../../../docs/t2-recovery.md) — recovery path and pre-flash gate for T2 hardware
+- [`docs/t2-diagnostics.md`](../../../docs/t2-diagnostics.md) — T2 boot triage: `scripts/t2-boot-diagnostics.sh`, image regressions versus platform noise
 - [`references/local-ota.md`](references/local-ota.md)
 - [`elements/oci/`](../../../elements/oci/)
 - [`files/firstboot/`](../../../files/firstboot/)

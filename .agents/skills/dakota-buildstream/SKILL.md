@@ -63,6 +63,7 @@ Never translate RPM, DNF, COPR, or Containerfile workflows into this repository.
 - `ref:` pointing to a branch name instead of a git commit or tag
 - Using `$(date)` or `$(hostname)` in install commands
 - Adding patches without an `Upstream-Status:` header and exit condition
+- Editing any element source while a build is running: an artifact's cache key covers its sources' bytes, so the edit orphans the artifact the build just produced and the whole dependant chain recomposes on the next invocation. Finish source edits, then build.
 
 ## Verification
 
