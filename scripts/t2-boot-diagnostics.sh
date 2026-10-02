@@ -276,16 +276,19 @@ t() { timeout "$T" "$@" 2>&1 || echo "(timeout/failure: $*)"; }
   esac
 
   # Traffic stage: the only check that shows the radio carries payload, which is
-  # what "Wi-Fi works" means. Plain HTTP on purpose -- the T2's clock reads 2011
-  # until NTP, so an HTTPS target could fail certificate validation and be
-  # mistaken for a Wi-Fi failure. The body is a fixed token, so a captive portal or
-  # a DNS failure records as a distinguishable failure rather than a silent one.
-  pay_body=$(timeout "$T" curl -fsS --max-time 15 http://detectportal.firefox.com/success.txt 2>/dev/null)
-  if [ "$pay_body" = "success" ]; then
-      verdict "wifi-payload" "PASS (HTTP fetch over $IFACE returned 'success')"
-  else
-      verdict "wifi-payload" "FAIL (HTTP fetch returned '${pay_body:-<empty or error>}'; see section 4)"
-  fi
+  # what "Wi-Fi works" means. NetworkManager performs the fetch itself, so this
+  # needs no external tool: curl is NOT in this image (it appears only as a
+  # build-dependency of libvirt), and a missing curl would read as a radio fault.
+  # NM's default probe URI is plain HTTP, so the T2's pre-NTP 2011 clock cannot
+  # fail it on certificate validation and confound a Wi-Fi result with a clock one.
+  pay_state=$(timeout 30 nmcli networking connectivity check 2>/dev/null | tail -1)
+  case "$pay_state" in
+      full)    verdict "wifi-payload" "PASS (NetworkManager connectivity check: full)" ;;
+      limited) verdict "wifi-payload" "FAIL (connectivity 'limited': reached a network but not the internet, or the tether is absent)" ;;
+      portal)  verdict "wifi-payload" "FAIL (connectivity 'portal': a captive portal answered; see section 4)" ;;
+      none)    verdict "wifi-payload" "FAIL (connectivity 'none': no route out over any interface)" ;;
+      *)       verdict "wifi-payload" "FAIL/NOT ATTEMPTED (connectivity check returned '${pay_state:-<nothing>}')" ;;
+  esac
   if journalctl -b -k --no-pager 2>&1 | grep -q "FILE CORRUPTED"; then
       verdict "boot media integrity" "FAIL (fs-verity mismatch; see section 9)"
   else

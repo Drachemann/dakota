@@ -61,6 +61,11 @@ RUNDIR=/run/t2-wifi-probe
 # exist in the image.
 FW_TARGET="${FW_TARGET:-/usr/lib/firmware/brcm}"
 FW_STAGE=/run/t2-wifi-probe/fw/brcm
+
+# Dependency-light mount check. `mountpoint` ships in util-linux proper rather
+# than util-linux-core, so it is not guaranteed present on a minimal image;
+# /proc/mounts always is.
+is_mounted() { awk -v t="$1" '$2==t{found=1} END{exit !found}' /proc/mounts; }
 NM_KEYFILE="/etc/NetworkManager/system-connections/${SSID}.nmconnection"
 mkdir -p "$OUT" "$RUNDIR"
 chmod 700 "$RUNDIR"
@@ -179,7 +184,7 @@ manual_test() {
 
 restore() {
     wpa_cli -p "$RUNDIR" -i "$IFACE" terminate >/dev/null 2>&1
-    if mountpoint -q "$FW_TARGET"; then umount "$FW_TARGET" >/dev/null 2>&1; fi
+    if is_mounted "$FW_TARGET"; then umount "$FW_TARGET" >/dev/null 2>&1; fi
     modprobe -r brcmfmac_wcc brcmfmac 2>/dev/null
     modprobe brcmfmac 2>/dev/null
     rm -rf /etc/firmware/brcm "$FW_STAGE"

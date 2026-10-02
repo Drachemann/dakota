@@ -50,6 +50,11 @@ RUNDIR=/run/t2-tests
 NM_KEYFILE="/etc/NetworkManager/system-connections/${SSID}.nmconnection"
 MODE="${1:---auto}"
 
+# Dependency-light mount check. `mountpoint` ships in util-linux proper rather
+# than util-linux-core, so it is not guaranteed present on a minimal image;
+# /proc/mounts always is. Exact field match, so a prefix cannot false-positive.
+is_mounted() { awk -v t="$1" '$2==t{found=1} END{exit !found}' /proc/mounts; }
+
 PSK=""
 # Fixed-string replacement, not sed: a passphrase containing '|' or '\' would
 # break or silently alter a sed expression, and a redactor that fails open is
@@ -220,7 +225,7 @@ collect() {
     say "=== $label"
     say "firmware: $(firmware_revision)"
     say "override target: $FW_TARGET $([ -d "$FW_TARGET" ] && echo '(exists)' || echo '(MISSING)')"
-    say "override mounted: $(mountpoint -q "$FW_TARGET" && echo "yes ($(find "$FW_TARGET" -maxdepth 1 -type f 2>/dev/null | wc -l) staged file(s))" || echo no)"
+    say "override mounted: $(is_mounted "$FW_TARGET" && echo "yes ($(find "$FW_TARGET" -maxdepth 1 -type f 2>/dev/null | wc -l) staged file(s))" || echo no)"
     say "staged set: $ALT_FW_SET ($(find "$FW_STAGE" -maxdepth 1 -type f 2>/dev/null | wc -l) file(s) in $FW_STAGE)"
     say "uptime: $(cut -d' ' -f1 /proc/uptime)s"
     wifi_stack_integrity
@@ -302,7 +307,7 @@ reload_brcmfmac() {
 revert_alt_firmware() {
     # /usr is read-only and no boot entry or modprobe.d file was touched, so the
     # unmount is the whole revert, and a reboot clears it regardless.
-    if mountpoint -q "$FW_TARGET"; then
+    if is_mounted "$FW_TARGET"; then
         umount "$FW_TARGET" && say "    $FW_TARGET unmounted" || say "    WARNING: umount $FW_TARGET failed"
     fi
     rm -rf "$FW_STAGE"
