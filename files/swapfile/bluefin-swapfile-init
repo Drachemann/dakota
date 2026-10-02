@@ -1,11 +1,16 @@
 #!/bin/sh
 # Create the disk-backed swapfile that zswap fronts (see bluefin/zswap-config.bst).
-# Idempotent: exits successfully if the swapfile already exists or the disk is
-# too small; removes a partially written file so the next boot retries.
+# Idempotent: exits successfully if the swapfile already exists, the backing
+# store would cost more boot time than it is worth, or the disk is too small.
+# Writes through a temporary name, so a creation that is interrupted (including
+# by this unit's own timeout) never leaves a file that the next boot would
+# mistake for a complete swapfile.
 set -eu
 
 SWAPDIR=/var/swap
 SWAPFILE="${SWAPDIR}/swapfile"
+PARTFILE="${SWAPFILE}.part"
+PROBEFILE="${SWAPDIR}/.write-probe"
 
 [ -e "${SWAPFILE}" ] && exit 0
 
@@ -38,18 +43,56 @@ case "${fstype}" in
         ;;
 esac
 
-cleanup() { rm -f "${SWAPFILE}"; }
-trap cleanup EXIT
+# TERM/INT as well as EXIT: systemd kills the whole cgroup when TimeoutStartSec
+# expires, dd dies on that signal, and the shell then runs this trap. A machine
+# that is reset mid-write leaves the temporary files behind instead, so the next
+# boot reclaims them before touching anything else.
+cleanup() { rm -f "${PARTFILE}" "${PROBEFILE}"; }
+trap cleanup EXIT TERM INT HUP
 
-touch "${SWAPFILE}"
-chmod 0600 "${SWAPFILE}"
+# Reclaim space from a creation that was interrupted by a reset.
+rm -f "${PARTFILE}" "${PROBEFILE}"
+
+# Budget the store against the measured write speed of the filesystem it lands
+# on, because this unit runs on the boot critical path: swap.target is part of
+# sysinit.target, so its entire write time is boot time. On a USB flash stick
+# measured at ~6 MiB/s an uncapped 8 GiB store held this unit open for the whole
+# 15 minute TimeoutStartSec, failed, and starved every other boot-time reader
+# behind it for the duration (ldconfig took 14 minutes in one capture).
+#
+# Classifying the media instead of measuring it is not enough: a first attempt
+# resolved /var's backing block device from mountinfo and skipped on a USB bus,
+# and it mis-detected the bootc composefs deployment that the T2 acceptance
+# machine boots -- the store was still created on the stick. Measuring the write
+# itself cannot be fooled by an unusual mount layout, and it also does the right
+# thing on slow fixed media (eMMC, network-backed storage) that a media test
+# would have allowed. 32 MiB with conv=fsync is a real device write, small
+# enough to cost about five seconds on the slowest stick seen so far.
+PROBE_MIB=32
+BUDGET_SEC=120
+probe_start=$(date +%s)
+dd if=/dev/zero of="${PROBEFILE}" bs=1M count="${PROBE_MIB}" conv=fsync status=none
+probe_sec=$(( $(date +%s) - probe_start ))
+rm -f "${PROBEFILE}"
+
+# Skip when the projected time for the full store exceeds the budget. The
+# integer-second probe only rounds down, so a fast disk (probe_sec 0) always
+# proceeds and a slow one is never under-estimated.
+if [ "${probe_sec}" -gt 0 ] && [ $((size_mib * probe_sec)) -gt $((PROBE_MIB * BUDGET_SEC)) ]; then
+    echo "bluefin-swapfile-init: writing ${PROBE_MIB} MiB to /var took ${probe_sec}s, so ${size_mib} MiB would exceed ${BUDGET_SEC}s; skipping swapfile creation (zswap runs without a backing store)"
+    exit 0
+fi
+
+touch "${PARTFILE}"
+chmod 0600 "${PARTFILE}"
 # btrfs requires NOCOW for swapfiles; must be set while the file is empty.
 # Fails harmlessly on xfs.
-chattr +C "${SWAPFILE}" 2>/dev/null || true
+chattr +C "${PARTFILE}" 2>/dev/null || true
 # dd, not fallocate: xfs and btrfs reject preallocated (unwritten) extents
 # at swapon time ("swapfile has holes").
-dd if=/dev/zero of="${SWAPFILE}" bs=1M count="${size_mib}" conv=fsync status=none
-mkswap "${SWAPFILE}"
+dd if=/dev/zero of="${PARTFILE}" bs=1M count="${size_mib}" conv=fsync status=none
+mkswap "${PARTFILE}"
+mv "${PARTFILE}" "${SWAPFILE}"
 
-trap - EXIT
+trap - EXIT TERM INT HUP
 echo "bluefin-swapfile-init: created ${size_mib} MiB swapfile at ${SWAPFILE}"
