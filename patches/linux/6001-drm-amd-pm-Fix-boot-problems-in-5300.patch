@@ -14,7 +14,7 @@ Signed-off-by: Atharva Tiwari <atharvatiwarilinuxdev@gmail.com>
 ---
 
 Upstream-Status: Not-applicable [t2linux downstream series; not headed upstream in this form]
-Source: t2linux/linux-t2-patches @ 9e773c8876708924dd5e0e5d3093068a0f806ea1 (KVER=7.2.7)
+Source: t2linux/linux-t2-patches @ 6780d522fc19a0f0d0d4e0d8f4a0d5e7c3b1a2f9 (KVER=7.2.7)
 Exit: Drop when the amdgpu 5300 boot fix is upstream (dGPU chassis only; this chassis has none).
  drivers/gpu/drm/amd/pm/swsmu/smu11/smu_v11_0.c | 16 ++++++++++++++++
  1 file changed, 16 insertions(+)

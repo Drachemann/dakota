@@ -9,7 +9,7 @@ Signed-off-by: Ashish Arora <ashisharora.linux@outlook.com>
 ---
 
 Upstream-Status: Not-applicable [t2linux downstream series; not headed upstream in this form]
-Source: t2linux/linux-t2-patches @ 9e773c8876708924dd5e0e5d3093068a0f806ea1 (KVER=7.2.7)
+Source: t2linux/linux-t2-patches @ 6780d522fc19a0f0d0d4e0d8f4a0d5e7c3b1a2f9 (KVER=7.2.7)
 Exit: Drop when i915 discards oversized BIOS framebuffers upstream.
  drivers/gpu/drm/i915/display/intel_fbdev.c | 6 +++---
  1 file changed, 3 insertions(+), 3 deletions(-)

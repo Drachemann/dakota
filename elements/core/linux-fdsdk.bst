@@ -5,24 +5,32 @@
 # plus elements/include/linux.yml, with build-depends junction-prefixed).
 # The vendored files/linux/ scripts and the fdsdk-owned entries in
 # patches/linux/ are verbatim copies from that ref; re-sync all of them at
-# every fdsdk bump. patches/linux/ additionally carries the Apple T2 series:
-#   - one reserved band, 1000-9999, imported from t2linux/linux-t2-patches
-#     (branch main, 9e773c88, KVER=7.2.7) and applied in lexicographic
-#     filename order with fdsdk's 0001-riscv... and gcc15.patch, which keep
-#     their names;
-#   - numbers stay upstream's (1001 t2bce, 2008-9002 subsystems) and carry
-#     upstream's internal order; every file has its own Upstream-Status,
-#     Source and Exit headers for the next re-sync;
-#   - 3001 comes from the series' main revision too. It is rebased onto the
-#     applesmc.c that v7.2.7 shipped, and v7.2.7 and v7.2.8 carry identical
-#     applesmc.c, so it applies to this tree unchanged. It previously had to be
-#     held one revision back (fea007484b84) only while this element pinned
-#     v7.2.6: applesmc.c changed between v7.2.6 and v7.2.7, so the main revision
-#     did not apply. Re-check that if the kernel ref ever moves backwards;
-#   - files/linux/dakota-config.sh drives the T2 symbols, and the Kconfig
-#     entries only the band provides are exempt from the pruning pass below
-#     so that losing the band fails the build instead of quietly shipping a
-#     kernel with no T2 support.
+# every fdsdk bump. patches/linux/ additionally carries the Apple T2 series.
+#
+# THE BAND OWNS THE 1000-9999 RANGE. What lives there, by origin:
+#   - 1001-9002: t2linux/linux-t2-patches, branch main at 6780d522fc19
+#     (KVER=7.2.7), applied in lexicographic filename order alongside fdsdk's
+#     own 0001-riscv... and gcc15.patch, which keep their names. Numbering is
+#     upstream's and so is the internal order. Every file carries its own
+#     Upstream-Status, Source and Exit headers so the next re-sync is mechanical;
+#   - 9501-9502: Dakota-local backports of two brcmfmac msgbuf fixes that are in
+#     wireless-next for 7.3 but in NO stable release as of v7.2.8. They patch
+#     drivers/net/wireless/broadcom/brcm80211/brcmfmac/msgbuf.c, which the
+#     t2linux series never touches, so they cannot conflict with it. The 95xx
+#     sub-band is reserved for exactly this: mainline fixes this element needs
+#     before they reach a stable release;
+#   - 3001 is not held back. It is rebased onto the applesmc.c that v7.2.7
+#     shipped, and v7.2.7 and v7.2.8 carry identical applesmc.c, so it applies to
+#     this tree unchanged. It was held one revision back (fea007484b84) only
+#     while this element pinned v7.2.6, since applesmc.c changed between v7.2.6
+#     and v7.2.7. Re-check that if the kernel ref ever moves backwards;
+#   - files/linux/dakota-config.sh drives the T2 symbols, and the Kconfig entries
+#     only the band provides are exempt from the pruning pass below so that
+#     losing the band fails the build instead of quietly shipping a kernel with
+#     no T2 support.
+#
+# Only 9501/9502 are Dakota's own; everything else in the band comes from
+# upstream t2linux and should be updated by re-syncing, not by editing here.
 #
 # As of 26.08, upstream builds ATH12K, strips modules (INSTALL_MOD_STRIP=1),
 # and splits vmlinux/System.map to the devel domain itself, so those former
