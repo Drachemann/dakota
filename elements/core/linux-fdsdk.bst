@@ -32,10 +32,17 @@
 #   T2BCE_CORE and T2BCE_VHCI forced =y: the internal keyboard, trackpad and
 #   Touch Bar are devices on the T2's virtual USB controller, and the LUKS
 #   passphrase prompt needs the keyboard from vmlinuz.
+#   CFG80211 and MAC80211 demoted to =m: x86_64's defconfig builds both in, and
+#   config-utils' module() leaves an already-=y symbol alone, so
+#   files/linux/fdsdk-config.sh removes them before requesting the module form.
+#   A built-in cfg80211 requests regulatory.db during early init, before the
+#   root filesystem exists, where the GNOME OS initramfs cannot supply it. This
+#   element only refuses to ship the regression again; the mechanism, the
+#   boot-visible symptom and the fix belong to files/linux/fdsdk-config.sh.
 #
 # Exit condition: only drop this element in favor of components/linux.bst
-# if upstream ships CONFIG_CRYPTO_ZSTD=y (or zswap moves off the karg) and
-# zswap is re-verified on a booted image.
+# if upstream ships CONFIG_CRYPTO_ZSTD=y (or zswap moves off the karg),
+# CFG80211 stays =m, and both are re-verified on a booted image.
 kind: make
 description: freedesktop-sdk stable Linux kernel (CRYPTO_ZSTD built in, Apple T2 series)
 
@@ -161,6 +168,14 @@ config:
     # so hold both bridge drivers in vmlinuz.
     grep -q '^CONFIG_T2BCE_CORE=y$' .config
     grep -q '^CONFIG_T2BCE_VHCI=y$' .config
+
+    # has() accepts =y too, so the expectation above passes whether the symbol
+    # is =m or =y. The module form is load-bearing: built in, cfg80211 asks for
+    # regulatory.db before the root filesystem is mounted, which fails on every
+    # boot and leaves the radio on the world regulatory domain. See the
+    # CFG80211/MAC80211 bullet in this element's header.
+    grep -q '^CONFIG_CFG80211=m$' .config
+    grep -q '^CONFIG_MAC80211=m$' .config
 
   install-commands:
   - |

@@ -417,9 +417,24 @@ module DUMMY
 
 # For wireless networks
 enable WIRELESS
+# CFG80211 and MAC80211 have to be =m, and that takes an explicit remove()
+# first: x86_64's defconfig already sets both to =y, and module() leaves a
+# symbol alone when it is already =y. Built in, cfg80211 requests regulatory.db
+# during early init, before the root filesystem is mounted, and nothing in that
+# path can supply it: the GNOME OS initramfs stages firmware only for modules it
+# carries, and its resolver for built-in modules reads modules.builtin.modinfo
+# and then looks for /usr/lib/firmware/<name>.xz, while fdsdk's
+# wireless-regdb-bin installs regulatory.db uncompressed. The request therefore
+# fails on every boot ("cfg80211: failed to load regulatory.db") and the radio
+# runs on the world regulatory domain, which marks the 2.4 GHz upper channels
+# passive and leaves 5 GHz unusable. As modules both load with the Wi-Fi driver,
+# long after the root filesystem exists, and the database loads. The exact =m
+# gates in linux-fdsdk.bst hold this through the next re-sync of this file.
+remove CFG80211
 module CFG80211
 enable CFG80211_WEXT
-enable MAC80211
+remove MAC80211
+module MAC80211
 enable NETDEVICES
 enable WLAN
 
